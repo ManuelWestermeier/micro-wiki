@@ -251,21 +251,35 @@ struct ArticleRenderer
     int update()
     {
         static bool lastBtn = HIGH;
+        static unsigned long lastRelease = 0;
+        static bool waitingSecondClick = false;
+
         bool btn = digitalRead(PIN_BUTTON);
+        unsigned long now = millis();
 
         if (btn == LOW && lastBtn == HIGH)
         {
-            pressStart = millis();
+            pressStart = now;
             isHolding = false;
         }
 
-        if (btn == LOW && (millis() - pressStart > HOLD_THRESHOLD))
+        if (btn == LOW && (now - pressStart > HOLD_THRESHOLD))
             isHolding = true;
 
         if (btn == HIGH && lastBtn == LOW)
         {
             if (!isHolding)
             {
+                if (waitingSecondClick && (now - lastRelease <= 300))
+                {
+                    waitingSecondClick = false;
+                    lastBtn = btn;
+                    return 1;
+                }
+
+                waitingSecondClick = true;
+                lastRelease = now;
+
                 if (mode == DOWN)
                     mode = STOP1;
                 else if (mode == STOP1)
@@ -275,10 +289,12 @@ struct ArticleRenderer
                 else
                     mode = DOWN;
             }
+
+            isHolding = false;
         }
 
-        if (btn == HIGH && lastBtn == LOW && isHolding)
-            isHolding = false;
+        if (waitingSecondClick && (now - lastRelease > 300))
+            waitingSecondClick = false;
 
         lastBtn = btn;
 
@@ -286,16 +302,15 @@ struct ArticleRenderer
         if (isHolding)
             step *= 3;
 
-        if (millis() - lastScroll > 80)
+        if (now - lastScroll > 80)
         {
-            lastScroll = millis();
+            lastScroll = now;
 
             if (mode == DOWN)
                 offsetY += step;
             else if (mode == UP)
                 offsetY -= step;
 
-            // CLAMP
             if (offsetY > 0)
             {
                 offsetY = 0;
