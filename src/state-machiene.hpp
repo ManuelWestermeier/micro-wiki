@@ -35,6 +35,7 @@ void start()
 
 void menu()
 {
+    // make the menu drawing better. button clicks better capture
     vector<string> menuItems = {"Artikel", "Edit", "Aus"};
 
     u8g2.clearBuffer();
@@ -85,12 +86,14 @@ void renderArticleUI()
 
 void renderEditUI()
 {
-    // create wif, show credentials, create minimal server
+    // create wif, show ssid, create minimal web http server, dns portal, that opens itselv
+    // hello world server
 }
 
 void renderShutdownUI()
 {
     // deepsleep confirm ui, wakeup = PIN_BUTTON
+    //  always tell dbclick = back,
 }
 
 void loopUI()
