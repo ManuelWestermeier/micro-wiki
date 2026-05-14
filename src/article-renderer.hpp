@@ -277,6 +277,9 @@ struct ArticleRenderer
             }
         }
 
+        if (btn == HIGH && lastBtn == LOW && isHolding)
+            isHolding = false;
+
         lastBtn = btn;
 
         int step = getStep();
