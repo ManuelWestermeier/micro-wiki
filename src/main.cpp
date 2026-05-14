@@ -2,8 +2,8 @@
 
 #include "config.hpp"
 #include "display.hpp"
-#include "article-renderer.hpp"
 #include "data.hpp"
+#include "state-machiene.hpp"
 
 // ---------- Setup ----------
 void setup()
@@ -13,10 +13,10 @@ void setup()
 
   initFS();
   initDisplay();
+
+  stateMachine();
 }
 
-// ---------- Loop ----------
 void loop()
 {
-  renderArticle(readArticleBinary("/deutsch/grammatik_und_sprache/sprachsystem.bin"));
 }
