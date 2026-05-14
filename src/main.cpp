@@ -3,6 +3,7 @@
 #include "config.hpp"
 #include "display.hpp"
 #include "article-renderer.hpp"
+#include "data.hpp"
 
 Article content = {
     {H, {"Demokratietheorie & Rechtsstaatsprinzipien"}},
@@ -17,6 +18,7 @@ void setup()
   pinMode(PIN_BUTTON, INPUT_PULLDOWN);
   pinMode(PIN_LED, OUTPUT);
 
+  initFS();
   initDisplay();
 }
 
