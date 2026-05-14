@@ -28,124 +28,136 @@ vector<Item> content = {
 struct Line
 {
   String text;
-  uint8_t type; // 0=H,1=T,2=LI
+  uint8_t type; // 0=H,1=T,2=LI,3=Spacer
 };
 
 vector<Line> rendered;
 
-static int offsetY = 0;
+int offsetY = 0;
+unsigned long lastScroll = 0;
 
-// dynamische Breite (Pixel → Zeichen)
-int getMaxChars(uint8_t type)
+enum ScrollMode
 {
-  if (type == 0)
-    return 9; // große Schrift
-  if (type == 2)
-    return 11; // LI
-  return 12;   // T
+  DOWN,
+  STOP1,
+  UP,
+  STOP2
+};
+ScrollMode mode = STOP1;
+
+// ---------- Umlaut-Ersatz ----------
+String normalize(String s)
+{
+  s.replace("ä", "ae");
+  s.replace("ö", "oe");
+  s.replace("ü", "ue");
+  s.replace("Ä", "Ae");
+  s.replace("Ö", "Oe");
+  s.replace("Ü", "Ue");
+  s.replace("ß", "ss");
+  return s;
 }
 
-// intelligenter Wrap mit Wortverschiebung + harter Trennung
-vector<String> wrapTextSmart(String text, int maxChars)
+// ---------- Font ----------
+void setFont(uint8_t t)
 {
-  vector<String> lines;
-
-  while (text.length() > 0)
-  {
-    if (text.length() <= maxChars)
-    {
-      lines.push_back(text);
-      break;
-    }
-
-    int cut = text.lastIndexOf(' ', maxChars);
-
-    if (cut > 0)
-    {
-      lines.push_back(text.substring(0, cut));
-      text = text.substring(cut + 1);
-    }
-    else
-    {
-      // hart trennen mit "-"
-      lines.push_back(text.substring(0, maxChars - 1) + "-");
-      text = text.substring(maxChars - 1);
-    }
-  }
-
-  return lines;
-}
-
-void buildRenderBuffer()
-{
-  rendered.clear();
-
-  for (auto &item : content)
-  {
-
-    if (item.typ == "H")
-    {
-      auto lines = wrapTextSmart(item.daten[0], getMaxChars(0));
-      for (auto &l : lines)
-        rendered.push_back({l, 0});
-    }
-
-    if (item.typ == "T")
-    {
-      auto lines = wrapTextSmart(item.daten[0], getMaxChars(1));
-      for (auto &l : lines)
-        rendered.push_back({l, 1});
-    }
-
-    if (item.typ == "LI")
-    {
-      for (auto &entry : item.daten)
-      {
-        auto lines = wrapTextSmart(entry, getMaxChars(2));
-        if (!lines.empty())
-          lines[0] = "> " + lines[0];
-        for (auto &l : lines)
-          rendered.push_back({l, 2});
-      }
-    }
-
-    // fester Item-Abstand 15px
-    rendered.push_back({"", 3});
-  }
-}
-
-void setFont(uint8_t type)
-{
-  if (type == 0)
-    u8g2.setFont(u8g2_font_7x13B_tf); // groß
-  else if (type == 1)
+  if (t == 0)
+    u8g2.setFont(u8g2_font_7x13B_tf);
+  else if (t == 1)
     u8g2.setFont(u8g2_font_6x12_tf);
   else
     u8g2.setFont(u8g2_font_6x10_tf);
 }
 
-int getLineHeight(uint8_t type)
+int getFH(uint8_t t)
 {
-  if (type == 0)
+  if (t == 0)
     return 14;
-  if (type == 1)
+  if (t == 1)
     return 12;
-  if (type == 2)
+  if (t == 2)
     return 10;
   return 0;
 }
 
-int getSpacing(uint8_t type, bool isNextLI)
+int getMaxChars(uint8_t t)
 {
-  if (type == 0)
-    return 5;
-  if (type == 1)
-    return 2;
-  if (type == 2)
-    return isNextLI ? 8 : 2;
-  return 15; // Item Abstand
+  if (t == 0)
+    return 9;
+  if (t == 2)
+    return 11;
+  return 12;
 }
 
+// ---------- Smart Wrap ----------
+vector<String> wrap(String txt, int maxC)
+{
+  vector<String> out;
+  txt = normalize(txt);
+
+  while (txt.length())
+  {
+    if (txt.length() <= maxC)
+    {
+      out.push_back(txt);
+      break;
+    }
+
+    int cut = txt.lastIndexOf(' ', maxC);
+
+    if (cut > 0)
+    {
+      out.push_back(txt.substring(0, cut));
+      txt = txt.substring(cut + 1);
+    }
+    else
+    {
+      out.push_back(txt.substring(0, maxC - 1) + "-");
+      txt = txt.substring(maxC - 1);
+    }
+  }
+  return out;
+}
+
+// ---------- Build ----------
+void build()
+{
+  rendered.clear();
+
+  for (auto &it : content)
+  {
+
+    if (it.typ == "H")
+    {
+      auto l = wrap(it.daten[0], getMaxChars(0));
+      for (auto &s : l)
+        rendered.push_back({s, 0});
+    }
+
+    if (it.typ == "T")
+    {
+      auto l = wrap(it.daten[0], getMaxChars(1));
+      for (auto &s : l)
+        rendered.push_back({s, 1});
+    }
+
+    if (it.typ == "LI")
+    {
+      for (auto &e : it.daten)
+      {
+        auto l = wrap(e, getMaxChars(2));
+        if (!l.empty())
+          l[0] = "> " + l[0];
+        for (auto &s : l)
+          rendered.push_back({s, 2});
+      }
+    }
+
+    rendered.push_back({"", 3});
+  }
+}
+
+// ---------- Draw ----------
 void draw()
 {
   u8g2.clearBuffer();
@@ -154,67 +166,101 @@ void draw()
 
   for (int i = 0; i < rendered.size(); i++)
   {
-    auto &line = rendered[i];
+    auto &ln = rendered[i];
 
-    if (line.type == 3)
+    if (ln.type == 3)
     {
       y += 15;
       continue;
     }
 
-    setFont(line.type);
-    int h = getLineHeight(line.type);
+    setFont(ln.type);
+    int fh = getFH(ln.type);
 
-    if (y > -h && y < 48)
+    if (y > -fh && y < 48)
     {
-      u8g2.drawStr(0, y + h, line.text.c_str());
+      u8g2.drawStr(0, y + fh, ln.text.c_str());
     }
 
-    bool nextIsLI = false;
-    if (i + 1 < rendered.size())
+    int spacing = 2;
+    if (ln.type == 0)
+      spacing = 5;
+    if (ln.type == 2)
     {
-      nextIsLI = (rendered[i + 1].type == 2);
+      if (i + 1 < rendered.size() && rendered[i + 1].type == 2)
+        spacing = 8;
+      else
+        spacing = 2;
     }
 
-    y += h + getSpacing(line.type, nextIsLI);
+    y += fh + spacing;
   }
 
   u8g2.sendBuffer();
 }
 
+// ---------- Scroll Step ----------
+int getCurrentStep()
+{
+  for (auto &l : rendered)
+  {
+    if (l.type != 3)
+    {
+      return getFH(l.type) / 3.5;
+    }
+  }
+  return 3;
+}
+
+// ---------- Setup ----------
 void setup()
 {
   pinMode(PIN_BUTTON, INPUT_PULLDOWN);
-  pinMode(PIN_LED, OUTPUT);
-
   Wire.begin(PIN_SDA, PIN_SCL);
   u8g2.begin();
 
-  buildRenderBuffer();
+  build();
   draw();
 }
 
+// ---------- Loop ----------
 void loop()
 {
-  if (digitalRead(PIN_BUTTON) == LOW)
+  static bool lastBtn = HIGH;
+
+  bool btn = digitalRead(PIN_BUTTON);
+
+  // Klick erkannt
+  if (lastBtn == HIGH && btn == LOW)
   {
-    unsigned long start = millis();
-    bool shortPress = true;
+    if (mode == DOWN)
+      mode = STOP1;
+    else if (mode == STOP1)
+      mode = UP;
+    else if (mode == UP)
+      mode = STOP2;
+    else
+      mode = DOWN;
 
-    while (digitalRead(PIN_BUTTON) == LOW)
+    delay(200);
+  }
+
+  lastBtn = btn;
+
+  int step = getCurrentStep();
+
+  if (millis() - lastScroll > 80)
+  {
+    lastScroll = millis();
+
+    if (mode == DOWN)
     {
-      if (millis() - start > 400)
-      {
-        offsetY -= 3;
-        shortPress = false;
-        draw();
-        delay(30);
-      }
+      offsetY -= step;
+      draw();
     }
-
-    if (shortPress)
+    else if (mode == UP)
     {
-      offsetY += 10;
+      offsetY += step;
       draw();
     }
   }
