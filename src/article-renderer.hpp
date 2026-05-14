@@ -155,6 +155,11 @@ struct ArticleRenderer
 
             rendered.push_back({"", 3});
         }
+
+        // Ende
+        rendered.push_back({"-- ENDE --", 0});
+        rendered.push_back({"", 3});
+        rendered.push_back({"", 3});
     }
 
     // ---------- Höhe berechnen ----------
@@ -289,9 +294,15 @@ struct ArticleRenderer
 
             // CLAMP
             if (offsetY > 0)
+            {
                 offsetY = 0;
+                mode = STOP1;
+            }
             if (offsetY < minOffsetY)
+            {
                 offsetY = minOffsetY;
+                mode = STOP2;
+            }
 
             draw();
         }
