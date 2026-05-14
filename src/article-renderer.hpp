@@ -50,14 +50,24 @@ struct ArticleRenderer
     };
     ScrollMode mode = STOP1;
 
+    // Button states
     unsigned long pressStart = 0;
     bool isHolding = false;
     const int HOLD_THRESHOLD = 300;
+    const unsigned long LONG_PRESS_THRESHOLD = 1500;
+
+    bool lastBtn = HIGH;
+    unsigned long lastRelease = 0;
+    bool waitingSecondClick = false;
+    bool pendingSingleClick = false;
 
     ArticleRenderer(const Article &c) : content(c)
     {
         build();
         calculateHeight();
+
+        // Initialen Button-Status lesen, um unbeabsichtigte Klicks beim Start zu ignorieren
+        lastBtn = digitalRead(PIN_BUTTON);
     }
 
     // ---------- Font ----------
@@ -250,13 +260,6 @@ struct ArticleRenderer
 
     int update()
     {
-        static bool lastBtn = HIGH;
-        static unsigned long pressStart = 0;
-
-        static unsigned long lastRelease = 0;
-        static bool waitingSecondClick = false;
-        static bool pendingSingleClick = false;
-
         bool btn = digitalRead(PIN_BUTTON);
         unsigned long now = millis();
 
@@ -268,8 +271,31 @@ struct ArticleRenderer
         }
 
         // Hold detection
-        if (btn == LOW && (now - pressStart > HOLD_THRESHOLD))
-            isHolding = true;
+        if (btn == LOW && lastBtn == LOW)
+        {
+            // Long Press Exit (> 1.5s)
+            if (now - pressStart > LONG_PRESS_THRESHOLD)
+            {
+                // Warten, bis der Button losgelassen wird, um Fehler im vorherigen Menü zu vermeiden
+                while (digitalRead(PIN_BUTTON) == LOW)
+                {
+                    delay(10);
+                }
+
+                // Status zurücksetzen
+                lastBtn = HIGH;
+                isHolding = false;
+                waitingSecondClick = false;
+                pendingSingleClick = false;
+
+                return 1;
+            }
+            // Fast Scroll Hold (> 0.3s)
+            else if (now - pressStart > HOLD_THRESHOLD)
+            {
+                isHolding = true;
+            }
+        }
 
         // Release
         if (btn == HIGH && lastBtn == LOW)
@@ -281,7 +307,7 @@ struct ArticleRenderer
                     waitingSecondClick = false;
                     pendingSingleClick = false;
                     lastBtn = btn;
-                    return 1; // double click
+                    return 1; // double click exit
                 }
 
                 waitingSecondClick = true;
