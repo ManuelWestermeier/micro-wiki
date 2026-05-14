@@ -274,7 +274,7 @@ struct ArticleRenderer
         if (btn == LOW && lastBtn == LOW)
         {
             // Long Press Exit (> 1.5s)
-            if (now - pressStart > LONG_PRESS_THRESHOLD)
+            if (now - pressStart > LONG_PRESS_THRESHOLD && (mode == STOP1 || mode == STOP2))
             {
                 // Warten, bis der Button losgelassen wird, um Fehler im vorherigen Menü zu vermeiden
                 while (digitalRead(PIN_BUTTON) == LOW)
@@ -297,24 +297,28 @@ struct ArticleRenderer
             }
         }
 
-        // Release
+        // Release des Buttons
         if (btn == HIGH && lastBtn == LOW)
         {
-            if (!isHolding)
+            unsigned long duration = now - pressStart;
+
+            if (duration < HOLD_THRESHOLD) // Nur wenn es kein Hold/Fast-Scroll war
             {
                 if (waitingSecondClick && (now - lastRelease <= 300))
                 {
+                    // Doppelklick erkannt!
                     waitingSecondClick = false;
                     pendingSingleClick = false;
-                    lastBtn = btn;
-                    return 1; // double click exit
+                    lastBtn = HIGH;
+                    return 1;
                 }
-
-                waitingSecondClick = true;
-                lastRelease = now;
-                pendingSingleClick = true;
+                else
+                {
+                    waitingSecondClick = true;
+                    lastRelease = now;
+                    pendingSingleClick = true;
+                }
             }
-
             isHolding = false;
         }
 
