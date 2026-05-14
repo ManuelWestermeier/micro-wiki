@@ -9,9 +9,16 @@
 
 using namespace std;
 
+enum Type
+{
+    H,
+    T,
+    LI
+};
+
 struct Item
 {
-    String typ;
+    Type typ;
     vector<String> daten;
 };
 
@@ -115,21 +122,21 @@ struct ArticleRenderer
 
         for (auto &it : content)
         {
-            if (it.typ == "H")
+            if (it.typ == H)
             {
                 auto l = wrap(it.daten[0], getMaxChars(0));
                 for (auto &s : l)
                     rendered.push_back({s, 0});
             }
 
-            if (it.typ == "T")
+            if (it.typ == T)
             {
                 auto l = wrap(it.daten[0], getMaxChars(1));
                 for (auto &s : l)
                     rendered.push_back({s, 1});
             }
 
-            if (it.typ == "LI")
+            if (it.typ == LI)
             {
                 for (auto &e : it.daten)
                 {
