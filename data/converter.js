@@ -1,84 +1,49 @@
 const fs = require("fs");
 
-function esc(txt) {
-    return txt
-        // Deutsche Zeichen
-        .replace(/ä/g, "ae").replace(/ö/g, "oe").replace(/ü/g, "ue")
-        .replace(/Ä/g, "Ae").replace(/Ö/g, "Oe").replace(/Ü/g, "Ue")
-        .replace(/ß/g, "ss")
+function normalizeU8g2(str) {
+    let out = "";
 
-        // Akzente allgemein
-        .replace(/[éèêë]/g, "e")
-        .replace(/[áàâ]/g, "a")
-        .replace(/[íìî]/g, "i")
-        .replace(/[óòô]/g, "o")
-        .replace(/[úùû]/g, "u")
-        .replace(/ñ/g, "n")
-        .replace(/ç/g, "c")
+    for (const ch of str) {
+        const code = ch.codePointAt(0);
 
-        // Hoch-/Tiefstellungen
-        .replace(/²/g, "^2").replace(/³/g, "^3").replace(/¹/g, "^1")
-        .replace(/⁰/g, "^0").replace(/⁴/g, "^4").replace(/⁵/g, "^5")
-        .replace(/⁶/g, "^6").replace(/⁷/g, "^7").replace(/⁸/g, "^8").replace(/⁹/g, "^9")
-        .replace(/⁺/g, "^+").replace(/⁻/g, "^-").replace(/ⁿ/g, "^n")
+        if (code < 0x20 || code > 0x7E) continue;
 
-        .replace(/₀/g, "_0").replace(/₁/g, "_1").replace(/₂/g, "_2")
-        .replace(/₃/g, "_3").replace(/₄/g, "_4").replace(/₅/g, "_5")
-        .replace(/₆/g, "_6").replace(/₇/g, "_7").replace(/₈/g, "_8")
-        .replace(/₉/g, "_9").replace(/₊/g, "_+").replace(/₋/g, "_-")
-        .replace(/ₐ/g, "_a").replace(/ₙ/g, "_n").replace(/ₖ/g, "_k")
+        if (ch === "\\") {
+            out += "/";
+            continue;
+        }
 
-        // Griechisch
-        .replace(/α/g, "alpha").replace(/β/g, "beta").replace(/γ/g, "gamma")
-        .replace(/δ/g, "delta").replace(/ε/g, "epsilon").replace(/λ/g, "lambda")
-        .replace(/μ/g, "mu").replace(/σ/g, "sigma").replace(/ρ/g, "rho")
-        .replace(/ω/g, "omega").replace(/θ/g, "theta").replace(/φ/g, "phi")
+        out += ch;
+    }
 
-        .replace(/Δ/g, "DELTA").replace(/Σ/g, "SUM").replace(/Ω/g, "OMEGA")
-        .replace(/Φ/g, "PHI").replace(/Ψ/g, "PSI").replace(/Λ/g, "LAMBDA")
-
-        // Operatoren
-        .replace(/−/g, "-")
-        .replace(/≈/g, "~")
-        .replace(/≠/g, "!=")
-        .replace(/≤/g, "<=")
-        .replace(/≥/g, ">=")
-        .replace(/≡/g, "===")
-        .replace(/∝/g, "PROP")
-        .replace(/∞/g, "INF")
-
-        // Pfeile
-        .replace(/→/g, "=>")
-        .replace(/←/g, "<=")
-        .replace(/↔/g, "<=>")
-        .replace(/⇒/g, "=>")
-        .replace(/⇔/g, "<=>")
-        .replace(/↑/g, "^")
-        .replace(/↓/g, "v")
-
-        // Mengen
-        .replace(/ℝ/g, "R").replace(/ℕ/g, "N").replace(/ℤ/g, "Z")
-        .replace(/ℚ/g, "Q").replace(/ℂ/g, "C")
-
-        // Sonstige
-        .replace(/·/g, "*")
-        .replace(/½/g, "1/2")
-        .replace(/§/g, "PAR")
-        .replace(/€/g, "EUR")
-        .replace(/∫/g, "INT")
-        .replace(/⃗/g, "->")
-        .replace(/̄/g, "-")
-        .replace(/∼/g, "~")
-
-        // Typografie
-        .replace(/–/g, "-")
-        .replace(/—/g, "-")
-        .replace(/…/g, "...")
-        .replace(/[“”]/g, '"')
-        .replace(/[‘’]/g, "'")
-
-        // Fallback: alles nicht-ASCII entfernen
-        .replace(/[^\x20-\x7E]/g, "");
+    return out;
 }
 
-fs.writeFileSync("wissen.json", JSON.stringify(JSON.parse(esc(fs.readFileSync("wissen.json", "utf-8"))), null, 2), "utf-8")
+function logCharDistribution(str) {
+    const map = new Map();
+
+    for (const ch of str) {
+        const code = ch.codePointAt(0);
+        const key = `${ch} (U+${code.toString(16).toUpperCase().padStart(4, "0")})`;
+        map.set(key, (map.get(key) || 0) + 1);
+    }
+
+    const sorted = [...map.entries()].sort((a, b) => b[1] - a[1]);
+    for (const [k, v] of sorted) {
+        console.log(`${k}: ${v}`);
+    }
+}
+
+const input = fs.readFileSync("wissen.json", "utf-8");
+
+logCharDistribution(input);
+
+const cleaned = normalizeU8g2(input);
+
+logCharDistribution(cleaned);
+
+fs.writeFileSync(
+    "wissen.json",
+    JSON.stringify(JSON.parse(cleaned), null, 2),
+    "utf-8"
+);

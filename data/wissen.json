@@ -1385,7 +1385,7 @@
             "Irrationale Zahlen: nicht als Bruch darstellbar - PI, e, SQRT2, phi (goldener Schnitt)",
             "Reelle Zahlen R: Q UNION Irrationale - vollstaendig, ueberabzaehlbar (Cantors Diagonalargument!)",
             "Komplexe Zahlen C: a+bi, i^2=-1 - Fundamentalsatz der Algebra: jedes Polynom hat Loesung",
-            "Mengenlehre (Cantor): Vereinigung AUNIONB, Schnitt AINTERSECTIONB, Differenz A\\B, Komplement A",
+            "Mengenlehre (Cantor): Vereinigung AUNIONB, Schnitt AINTERSECTIONB, Differenz A//B, Komplement A",
             "Kardinalitaet: |{1,2,3}|=3 | Cantors Beweis: R nicht abzaehlbar (ueberabzaehlbar unendlich!)",
             "Primzahlen: nur durch 1 und sich selbst teilbar. Unendlich viele (Euklid-Beweis!) - 2,3,5,7,11,13...",
             "Fundamentalsatz der Arithmetik: jede natuerliche Zahl > 1 eindeutig in Primfaktoren zerlegbar",
