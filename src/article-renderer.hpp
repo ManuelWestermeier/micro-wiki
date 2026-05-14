@@ -34,11 +34,11 @@ struct ArticleRenderer
 {
     Article content;
 
-    ArticleRenderer(Article content) : content(content) { renderArticle(); }
-
     vector<Line> rendered;
 
     int offsetY = 0;
+    int minOffsetY = 0;
+
     unsigned long lastScroll = 0;
 
     enum ScrollMode
@@ -50,10 +50,15 @@ struct ArticleRenderer
     };
     ScrollMode mode = STOP1;
 
-    // ---------- Button ----------
     unsigned long pressStart = 0;
     bool isHolding = false;
     const int HOLD_THRESHOLD = 300;
+
+    ArticleRenderer(const Article &c) : content(c)
+    {
+        build();
+        calculateHeight();
+    }
 
     // ---------- Font ----------
     void setFont(uint8_t t)
@@ -152,6 +157,41 @@ struct ArticleRenderer
         }
     }
 
+    // ---------- Höhe berechnen ----------
+    void calculateHeight()
+    {
+        int y = 0;
+
+        for (int i = 0; i < rendered.size(); i++)
+        {
+            auto &ln = rendered[i];
+
+            if (ln.type == 3)
+            {
+                y += 15;
+                continue;
+            }
+
+            int fh = getFH(ln.type);
+
+            int spacing = 2;
+            if (ln.type == 0)
+                spacing = 5;
+            if (ln.type == 2)
+            {
+                if (i + 1 < rendered.size() && rendered[i + 1].type == 2)
+                    spacing = 8;
+                else
+                    spacing = 2;
+            }
+
+            y += fh + spacing;
+        }
+
+        // Displayhöhe = 48
+        minOffsetY = min(0, 48 - y);
+    }
+
     // ---------- Draw ----------
     void draw()
     {
@@ -198,33 +238,25 @@ struct ArticleRenderer
         for (auto &l : rendered)
         {
             if (l.type != 3)
-                return min(4, max<int>(int(1), int(getFH(l.type) / 3)));
+                return min(4, max<int>(1, getFH(l.type) / 3));
         }
         return 3;
     }
 
-    void renderArticle()
+    int update()
     {
-        build();
-        draw();
-    Update:
         static bool lastBtn = HIGH;
         bool btn = digitalRead(PIN_BUTTON);
 
-        // press start
         if (btn == LOW && lastBtn == HIGH)
         {
             pressStart = millis();
             isHolding = false;
         }
 
-        // holding detection
         if (btn == LOW && (millis() - pressStart > HOLD_THRESHOLD))
-        {
             isHolding = true;
-        }
 
-        // release = click
         if (btn == HIGH && lastBtn == LOW)
         {
             if (!isHolding)
@@ -251,21 +283,31 @@ struct ArticleRenderer
             lastScroll = millis();
 
             if (mode == DOWN)
-            {
-                offsetY = offsetY + step;
-                draw();
-            }
+                offsetY += step;
             else if (mode == UP)
-            {
-                offsetY = offsetY - step;
-                draw();
-            }
+                offsetY -= step;
+
+            // CLAMP
+            if (offsetY > 0)
+                offsetY = 0;
+            if (offsetY < minOffsetY)
+                offsetY = minOffsetY;
+
+            draw();
         }
-        goto Update;
+
+        return 0;
     }
 };
 
-void renderArticle(Article content)
+int renderArticle(Article content)
 {
-    delete new ArticleRenderer(content);
+    ArticleRenderer r(content);
+    r.draw();
+    while (true)
+    {
+        int res = r.update();
+        if (res != 0)
+            return res;
+    }
 }
