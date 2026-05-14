@@ -20,15 +20,15 @@ struct Item
 
 vector<Item> content = {
     {"H", {"Demokratietheorie & Rechtsstaatsprinzipien"}},
-    {"T", {"Demokratie (griech. demos=Volk, kratos=Herrschaft) ist das einzige Regierungssystem, das regelmäßige Machtablösung ohne Gewalt ermöglicht."}},
-    {"LI", {"Direkte Demokratie: Bürger entscheiden direkt (Schweiz, Athen)", "Repräsentative Demokratie: Vertreter entscheiden (DE, USA)", "Konstitutionelle Monarchie: Monarch eingeschränkt (GB, Spanien)", "Westminster-System: Regierung vom Parlament abhängig", "Präsidentielles System: Präsident unabhängig (USA)", "Verhältniswahlrecht: Stimmen → Sitze", "Mehrheitswahlrecht: Gewinner-nimmt-alles", "Föderalismus: Bund vs. Länder"}},
+    {"T", {"Demokratie (griech. demos=Volk, kratos=Herrschaft) ist das einzige Regierungssystem, das regelmäßige Machtabloesung ohne Gewalt ermoeglicht."}},
+    {"LI", {"Direkte Demokratie: Buerger entscheiden direkt (Schweiz, Athen)", "Repraesentative Demokratie: Vertreter entscheiden (DE, USA)", "Konstitutionelle Monarchie: Monarch eingeschraenkt (GB, Spanien)", "Westminster-System: Regierung vom Parlament abhaengig", "Praesidentielles System: Praesident unabhaengig (USA)", "Verhaeltniswahlrecht: Stimmen → Sitze", "Mehrheitswahlrecht: Gewinner-nimmt-alles", "Foederalismus: Bund vs. Laender"}},
     {"H", {"Internationale Rechtssysteme"}},
-    {"LI", {"Common Law: Richterrecht (GB, USA)", "Civil Law: Kodifiziert (DE, FR)", "Scharia: religiöses Recht", "Völkerrecht: zwischen Staaten", "ICC: Den Haag, Kriegsverbrechen", "WTO: Handelsstreitigkeiten"}}};
+    {"LI", {"Common Law: Richterrecht (GB, USA)", "Civil Law: Kodifiziert (DE, FR)", "Scharia: religioeses Recht", "Voelkerrecht: zwischen Staaten", "ICC: Den Haag, Kriegsverbrechen", "WTO: Handelsstreitigkeiten"}}};
 
 struct Line
 {
   String text;
-  uint8_t type; // 0=H,1=T,2=LI,3=Spacer
+  uint8_t type;
 };
 
 vector<Line> rendered;
@@ -45,18 +45,10 @@ enum ScrollMode
 };
 ScrollMode mode = STOP1;
 
-// ---------- Umlaut-Ersatz ----------
-String normalize(String s)
-{
-  s.replace("ä", "ae");
-  s.replace("ö", "oe");
-  s.replace("ü", "ue");
-  s.replace("Ä", "Ae");
-  s.replace("Ö", "Oe");
-  s.replace("Ü", "Ue");
-  s.replace("ß", "ss");
-  return s;
-}
+// ---------- Button ----------
+unsigned long pressStart = 0;
+bool isHolding = false;
+const int HOLD_THRESHOLD = 300;
 
 // ---------- Font ----------
 void setFont(uint8_t t)
@@ -89,11 +81,10 @@ int getMaxChars(uint8_t t)
   return 12;
 }
 
-// ---------- Smart Wrap ----------
+// ---------- Wrap ----------
 vector<String> wrap(String txt, int maxC)
 {
   vector<String> out;
-  txt = normalize(txt);
 
   while (txt.length())
   {
@@ -126,7 +117,6 @@ void build()
 
   for (auto &it : content)
   {
-
     if (it.typ == "H")
     {
       auto l = wrap(it.daten[0], getMaxChars(0));
@@ -178,9 +168,7 @@ void draw()
     int fh = getFH(ln.type);
 
     if (y > -fh && y < 48)
-    {
       u8g2.drawStr(0, y + fh, ln.text.c_str());
-    }
 
     int spacing = 2;
     if (ln.type == 0)
@@ -199,15 +187,13 @@ void draw()
   u8g2.sendBuffer();
 }
 
-// ---------- Scroll Step ----------
-int getCurrentStep()
+// ---------- Scroll ----------
+int getStep()
 {
   for (auto &l : rendered)
   {
     if (l.type != 3)
-    {
-      return getFH(l.type) / 3.5;
-    }
+      return min(4, max<int>(int(1), int(getFH(l.type) / 3)));
   }
   return 3;
 }
@@ -227,27 +213,42 @@ void setup()
 void loop()
 {
   static bool lastBtn = HIGH;
-
   bool btn = digitalRead(PIN_BUTTON);
 
-  // Klick erkannt
-  if (lastBtn == HIGH && btn == LOW)
+  // press start
+  if (btn == LOW && lastBtn == HIGH)
   {
-    if (mode == DOWN)
-      mode = STOP1;
-    else if (mode == STOP1)
-      mode = UP;
-    else if (mode == UP)
-      mode = STOP2;
-    else
-      mode = DOWN;
+    pressStart = millis();
+    isHolding = false;
+  }
 
-    delay(200);
+  // holding detection
+  if (btn == LOW && (millis() - pressStart > HOLD_THRESHOLD))
+  {
+    isHolding = true;
+  }
+
+  // release = click
+  if (btn == HIGH && lastBtn == LOW)
+  {
+    if (!isHolding)
+    {
+      if (mode == DOWN)
+        mode = STOP1;
+      else if (mode == STOP1)
+        mode = UP;
+      else if (mode == UP)
+        mode = STOP2;
+      else
+        mode = DOWN;
+    }
   }
 
   lastBtn = btn;
 
-  int step = getCurrentStep();
+  int step = getStep();
+  if (isHolding)
+    step *= 3;
 
   if (millis() - lastScroll > 80)
   {
@@ -255,12 +256,12 @@ void loop()
 
     if (mode == DOWN)
     {
-      offsetY -= step;
+      offsetY = offsetY + step;
       draw();
     }
     else if (mode == UP)
     {
-      offsetY += step;
+      offsetY = offsetY - step;
       draw();
     }
   }
