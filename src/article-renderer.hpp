@@ -251,21 +251,27 @@ struct ArticleRenderer
     int update()
     {
         static bool lastBtn = HIGH;
+        static unsigned long pressStart = 0;
+
         static unsigned long lastRelease = 0;
         static bool waitingSecondClick = false;
+        static bool pendingSingleClick = false;
 
         bool btn = digitalRead(PIN_BUTTON);
         unsigned long now = millis();
 
+        // Press start
         if (btn == LOW && lastBtn == HIGH)
         {
             pressStart = now;
             isHolding = false;
         }
 
+        // Hold detection
         if (btn == LOW && (now - pressStart > HOLD_THRESHOLD))
             isHolding = true;
 
+        // Release
         if (btn == HIGH && lastBtn == LOW)
         {
             if (!isHolding)
@@ -273,26 +279,35 @@ struct ArticleRenderer
                 if (waitingSecondClick && (now - lastRelease <= 300))
                 {
                     waitingSecondClick = false;
+                    pendingSingleClick = false;
                     lastBtn = btn;
-                    return 1;
+                    return 1; // double click
                 }
 
                 waitingSecondClick = true;
                 lastRelease = now;
-
-                if (mode == DOWN)
-                    mode = STOP1;
-                else if (mode == STOP1)
-                    mode = UP;
-                else if (mode == UP)
-                    mode = STOP2;
-                else
-                    mode = DOWN;
+                pendingSingleClick = true;
             }
 
             isHolding = false;
         }
 
+        // Confirm single click after timeout
+        if (pendingSingleClick && (now - lastRelease > 300))
+        {
+            pendingSingleClick = false;
+
+            if (mode == DOWN)
+                mode = STOP1;
+            else if (mode == STOP1)
+                mode = UP;
+            else if (mode == UP)
+                mode = STOP2;
+            else
+                mode = DOWN;
+        }
+
+        // Reset double click window
         if (waitingSecondClick && (now - lastRelease > 300))
             waitingSecondClick = false;
 

@@ -3,8 +3,10 @@
 #include <Arduino.h>
 #include <vector>
 #include <string>
+#include <climits>
 
 #include <esp_sleep.h>
+#include <driver/gpio.h>
 #include <WiFi.h>
 #include <WebServer.h>
 #include <DNSServer.h>
@@ -14,14 +16,11 @@
 #include "article-renderer.hpp"
 #include "data.hpp"
 
-// NOTE: defining variables in a header causes ODR violations if included in
-// multiple translation units. Move definitions to a ui.cpp and keep only
-// `extern` declarations here.
 bool isMenuOpen = true;
 std::vector<std::string> currentPath;
 uint8_t menuState = 0;
 
-// ─── Button ──────────────────────────────────────────────────────────────────
+// ─── Button (menu / edit / shutdown) ─────────────────────────────────────────
 
 enum ButtonEvent
 {
@@ -37,21 +36,18 @@ ButtonEvent readButton()
         return BTN_NONE;
 
     uint32_t pressedAt = millis();
-
-    // Wait for release or hold threshold
     while (digitalRead(PIN_BUTTON) == LOW)
     {
         if (millis() - pressedAt > 500)
         {
             while (digitalRead(PIN_BUTTON) == LOW)
-                ; // wait for release
+                ;
             delay(50);
             return BTN_HOLD;
         }
     }
-    delay(50); // debounce
+    delay(50);
 
-    // Listen for a second press within 250 ms → double click
     uint32_t releasedAt = millis();
     while (millis() - releasedAt < 250)
     {
@@ -76,7 +72,6 @@ void showSplash()
     u8g2.sendBuffer();
     delay(1000);
 
-    // flash white → black
     u8g2.clearBuffer();
     u8g2.drawBox(0, 0, 72, 40);
     u8g2.sendBuffer();
@@ -95,7 +90,6 @@ void menu()
 
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_8x13_tr);
-
     for (size_t i = 0; i < menuItems.size(); i++)
     {
         if (i == menuState)
@@ -118,68 +112,347 @@ void menu()
         menuState = (menuState + 1) % menuItems.size();
         break;
     case BTN_HOLD:
-        isMenuOpen = false; // confirm selection → enter sub-UI
+        isMenuOpen = false;
         break;
     default:
         break;
     }
-
     delay(20);
 }
 
-// ─── Article browser ─────────────────────────────────────────────────────────
-// Navigation: click = next item, hold = open, double-click = back
-// currentPath tracks the directory stack; an empty path means root.
+// ─── List Browser ─────────────────────────────────────────────────────────────
 
-static void drawList(const std::vector<std::string> &items, size_t selected)
+struct ListBrowser
 {
-    u8g2.clearBuffer();
-    u8g2.setFont(u8g2_font_6x10_tr);
-
-    // Show up to 4 rows; scroll window follows the selection
-    const size_t visibleRows = 4;
-    size_t offset = (selected >= visibleRows) ? selected - visibleRows + 1 : 0;
-
-    for (size_t i = 0; i < visibleRows && (offset + i) < items.size(); i++)
+    struct RenderLine
     {
-        size_t idx = offset + i;
-        int y = (i + 1) * 10 - 1;
+        std::string text;
+        size_t itemIndex;
+        bool firstLine;
+    };
 
-        if (idx == selected)
+    std::vector<std::string> items;
+    std::vector<RenderLine> lines;
+    size_t selected = SIZE_MAX;
+
+    int offsetY = 0;
+    int minOffsetY = 0;
+    unsigned long lastScroll = 0;
+
+    enum ScrollMode
+    {
+        DOWN,
+        STOP1,
+        UP,
+        STOP2
+    } mode = STOP1;
+
+    unsigned long pressStart = 0;
+    bool isHolding = false;
+    bool lastBtn = false;
+    unsigned long lastRelease = 0;
+    bool waitingDblClick = false;
+
+    static constexpr int LINE_H = 13;
+    static constexpr int ITEM_GAP = 6;
+    static constexpr int DISPLAY_H = 40;
+    static constexpr int MAX_CHARS = 12;
+    static constexpr unsigned long HOLD_MS = 500;
+
+    // ── Build ─────────────────────────────────────────────────────────────
+
+    std::vector<std::string> wrapText(const std::string &txt)
+    {
+        std::vector<std::string> out;
+        std::string s = txt;
+        while (s.size() > (size_t)MAX_CHARS)
         {
-            u8g2.drawBox(0, i * 10, 72, 10);
-            u8g2.setDrawColor(0);
-            u8g2.drawStr(2, y, items[idx].c_str());
-            u8g2.setDrawColor(1);
+            size_t cut = s.rfind(' ', MAX_CHARS);
+            if (cut != std::string::npos && cut > 0)
+            {
+                out.push_back(s.substr(0, cut));
+                s = s.substr(cut + 1);
+            }
+            else
+            {
+                out.push_back(s.substr(0, MAX_CHARS - 1) + "-");
+                s = s.substr(MAX_CHARS - 1);
+            }
         }
-        else
+        if (!s.empty())
+            out.push_back(s);
+        return out;
+    }
+
+    void build()
+    {
+        lines.clear();
+        for (size_t i = 0; i < items.size(); i++)
         {
-            u8g2.drawStr(2, y, items[idx].c_str());
+            auto wrapped = wrapText(items[i]);
+            for (size_t j = 0; j < wrapped.size(); j++)
+                lines.push_back({wrapped[j], i, j == 0});
         }
     }
-    u8g2.sendBuffer();
-}
+
+    void calcHeight()
+    {
+        int y = 0;
+        size_t prev = SIZE_MAX;
+        for (auto &l : lines)
+        {
+            if (l.itemIndex != prev && prev != SIZE_MAX)
+                y += ITEM_GAP;
+            y += LINE_H;
+            prev = l.itemIndex;
+        }
+        minOffsetY = std::min(0, DISPLAY_H - y - 4);
+    }
+
+    void reset(const std::vector<std::string> &it)
+    {
+        items = it;
+        selected = (items.empty() ? SIZE_MAX : 0);
+
+        offsetY = 0;
+        mode = STOP1;
+
+        isHolding = false;
+        waitingDblClick = false;
+        pressStart = 0;
+        lastRelease = 0;
+
+        lastBtn = false;
+
+        build();
+        calcHeight();
+        syncSelected();
+        draw();
+    }
+
+    // Clears button state after returning from a sub-screen (article, etc.)
+    void resetButtonState()
+    {
+        lastBtn = (digitalRead(PIN_BUTTON) == LOW);
+        isHolding = false;
+        waitingDblClick = false;
+        pressStart = 0;
+        lastRelease = 0;
+    }
+
+    // ── Selected tracking ─────────────────────────────────────────────────
+
+    void syncSelected()
+    {
+        int target = -offsetY;
+        int bestDist = INT_MAX;
+        int y = 0;
+        size_t prev = SIZE_MAX;
+
+        bool found = false;
+
+        for (auto &l : lines)
+        {
+            if (l.itemIndex != prev && prev != SIZE_MAX)
+                y += ITEM_GAP;
+
+            if (l.firstLine)
+            {
+                int d = abs(y - target);
+                if (d < bestDist)
+                {
+                    bestDist = d;
+                    selected = l.itemIndex;
+                    found = true;
+                }
+            }
+
+            y += LINE_H;
+            prev = l.itemIndex;
+        }
+
+        if (!found)
+            selected = (items.empty() ? SIZE_MAX : 0);
+    }
+
+    // ── Draw ─────────────────────────────────────────────────────────────
+
+    void draw()
+    {
+        u8g2.clearBuffer();
+        u8g2.setFont(u8g2_font_6x10_tr);
+
+        int y = offsetY;
+        size_t prev = SIZE_MAX;
+
+        for (auto &l : lines)
+        {
+            if (l.itemIndex != prev && prev != SIZE_MAX)
+                y += ITEM_GAP;
+
+            if (y + LINE_H > 0 && y < DISPLAY_H)
+            {
+                int baseline = y + LINE_H - 2;
+                if (l.firstLine && l.itemIndex == selected)
+                {
+                    u8g2.drawBox(0, y, 72, LINE_H);
+                    u8g2.setDrawColor(0);
+                    u8g2.drawStr(2, baseline, l.text.c_str());
+                    u8g2.setDrawColor(1);
+                }
+                else
+                {
+                    u8g2.drawStr(l.firstLine ? 2 : 8, baseline, l.text.c_str());
+                }
+            }
+
+            y += LINE_H;
+            prev = l.itemIndex;
+        }
+
+        u8g2.sendBuffer();
+    }
+
+    // ── Update ───────────────────────────────────────────────────────────
+    //  Returns   0  → browsing
+    //           -1  → double-click → back
+    //           ≥0  → long-press   → selected item index
+
+    int update()
+    {
+        bool btn = (digitalRead(PIN_BUTTON) == LOW);
+        unsigned long now = millis();
+
+        if (btn && !lastBtn)
+        {
+            pressStart = now;
+            isHolding = false;
+        }
+
+        if (btn && lastBtn && !isHolding && (now - pressStart > HOLD_MS))
+        {
+            isHolding = true;
+
+            while (digitalRead(PIN_BUTTON) == LOW)
+                ;
+            delay(50);
+
+            lastBtn = false;
+            return (int)selected;
+        }
+
+        if (!btn && lastBtn && !isHolding)
+        {
+            if (waitingDblClick && (now - lastRelease <= 300))
+            {
+                waitingDblClick = false;
+                lastBtn = false;
+                return -1;
+            }
+
+            waitingDblClick = true;
+            lastRelease = now;
+
+            switch (mode)
+            {
+            case DOWN:
+                mode = STOP1;
+                break;
+            case STOP1:
+                mode = UP;
+                break;
+            case UP:
+                mode = STOP2;
+                break;
+            case STOP2:
+                mode = DOWN;
+                break;
+            }
+
+            isHolding = false;
+        }
+
+        if (waitingDblClick && (now - lastRelease > 300))
+            waitingDblClick = false;
+
+        lastBtn = btn;
+
+        if (now - lastScroll > 80)
+        {
+            lastScroll = now;
+
+            if (mode == DOWN)
+                offsetY += 2;
+            else if (mode == UP)
+                offsetY -= 2;
+
+            if (offsetY > 0)
+            {
+                offsetY = 0;
+                mode = STOP1;
+            }
+
+            if (offsetY < minOffsetY)
+            {
+                offsetY = minOffsetY;
+                mode = STOP2;
+            }
+
+            syncSelected();
+            draw();
+        }
+
+        return 0;
+    }
+};
+
+// ─── Article browser ─────────────────────────────────────────────────────────
 
 void renderArticleUI()
 {
-    static size_t selectedIndex = 0;
+    static ListBrowser lb;
+    static std::string lastDir = "";
+    static bool ready = false;
 
-    // Build the path string for readDir
     std::string dir = "/";
     for (const auto &seg : currentPath)
         dir += seg + "/";
 
-    std::vector<std::string> entries = readDir(dir.c_str());
-
-    if (entries.empty())
+    if (!ready || dir != lastDir)
     {
-        u8g2.clearBuffer();
-        u8g2.setFont(u8g2_font_6x10_tr);
-        u8g2.drawStr(2, 20, "Leer.");
-        u8g2.sendBuffer();
-        delay(800);
+        std::vector<std::string> entries = readDir(dir.c_str());
 
-        // go back automatically
+        if (entries.empty())
+        {
+            u8g2.clearBuffer();
+            u8g2.setFont(u8g2_font_6x10_tr);
+            u8g2.drawStr(2, 20, "Leer.");
+            u8g2.sendBuffer();
+            delay(800);
+
+            if (!currentPath.empty())
+                currentPath.pop_back();
+            else
+            {
+                isMenuOpen = true;
+                menuState = 0;
+            }
+
+            ready = false;
+            return;
+        }
+
+        lb.reset(entries);
+        lastDir = dir;
+        ready = true;
+        return;
+    }
+
+    int res = lb.update();
+
+    if (res == -1)
+    {
+        ready = false;
         if (!currentPath.empty())
             currentPath.pop_back();
         else
@@ -187,62 +460,24 @@ void renderArticleUI()
             isMenuOpen = true;
             menuState = 0;
         }
-        selectedIndex = 0;
-        return;
     }
-
-    // clamp selection after directory changes
-    if (selectedIndex >= entries.size())
-        selectedIndex = 0;
-
-    drawList(entries, selectedIndex);
-
-    switch (readButton())
+    else if (res >= 0 && (size_t)res < lb.items.size())
     {
-    case BTN_CLICK:
-        selectedIndex = (selectedIndex + 1) % entries.size();
-        break;
+        const std::string &entry = lb.items[(size_t)res];
 
-    case BTN_HOLD:
-    {
-        const std::string &entry = entries[selectedIndex];
-
-        // .bin files are articles; everything else is a directory
-        if (entry.size() > 4 &&
-            entry.compare(entry.size() - 4, 4, ".bin") == 0)
+        if (entry.size() > 4 && entry.compare(entry.size() - 4, 4, ".bin") == 0)
         {
-            std::string articlePath = dir + entry;
-            renderArticle(readArticleBinary(articlePath.c_str()));
-            // renderArticle blocks until the user exits it
+            renderArticle(readArticleBinary((dir + entry).c_str()));
+            // Clear stale button state accumulated inside the article renderer
+            lb.resetButtonState();
+            lb.draw();
         }
         else
         {
             currentPath.push_back(entry);
-            selectedIndex = 0;
+            ready = false;
         }
-        break;
     }
-
-    case BTN_DOUBLE_CLICK:
-        if (!currentPath.empty())
-        {
-            currentPath.pop_back();
-            selectedIndex = 0;
-        }
-        else
-        {
-            // back to main menu from root
-            isMenuOpen = true;
-            menuState = 0;
-            selectedIndex = 0;
-        }
-        break;
-
-    default:
-        break;
-    }
-
-    delay(20);
 }
 
 // ─── Edit / Wi-Fi portal ──────────────────────────────────────────────────────
@@ -256,24 +491,20 @@ static const char PORTAL_HTML[] PROGMEM = R"(<!DOCTYPE html>
 <meta name='viewport' content='width=device-width,initial-scale=1'>
 <title>W2GO</title>
 <style>body{font-family:sans-serif;max-width:480px;margin:2rem auto;padding:1rem}
-h1{font-size:1.4rem}input,button{width:100%;padding:.5rem;margin:.4rem 0;box-sizing:border-box}
-button{background:#222;color:#fff;border:none;cursor:pointer}</style></head>
+h1{font-size:1.4rem}button{width:100%;padding:.5rem;margin:.4rem 0;
+background:#222;color:#fff;border:none;cursor:pointer}</style></head>
 <body><h1>W2GO Dateien</h1>
-<p>Verbunden. Lege .bin-Artikel unter /artikel/ ab.</p>
-<p><small>Zum Beenden: langer Tastendruck am Gerät.</small></p>
+<p>Verbunden. Lege .bin-Artikel auf das Gerät.</p>
+<p><small>Beenden: langer Tastendruck am Gerät.</small></p>
 </body></html>)";
 
 static void startWifi()
 {
     WiFi.mode(WIFI_AP);
-    WiFi.softAP("W2GO", nullptr, 1, false, 1); // open AP, channel 1, max 1 client
-
+    WiFi.softAP("W2GO", nullptr, 1, false, 1);
     IPAddress apIP(192, 168, 4, 1);
     WiFi.softAPConfig(apIP, apIP, IPAddress(255, 255, 255, 0));
-
-    // Captive-portal DNS: redirect everything to our IP
     dnsServer.start(53, "*", apIP);
-
     httpServer.onNotFound([]()
                           { httpServer.send_P(200, "text/html", PORTAL_HTML); });
     httpServer.begin();
@@ -294,13 +525,12 @@ void renderEditUI()
     if (!wifiRunning)
         startWifi();
 
-    // Display SSID + IP
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_6x10_tr);
     u8g2.drawStr(2, 10, "SSID:");
     u8g2.drawStr(2, 20, "W2GO");
     u8g2.drawStr(2, 32, "192.168.4.1");
-    u8g2.drawStr(2, 40, "[Hold=Beenden]");
+    u8g2.drawStr(2, 40, "[2x=Beenden]");
     u8g2.sendBuffer();
 
     dnsServer.processNextRequest();
@@ -312,15 +542,13 @@ void renderEditUI()
         isMenuOpen = true;
         menuState = 0;
     }
-
     delay(10);
 }
 
-// ─── Shutdown / deep sleep ────────────────────────────────────────────────────
+// ─── Shutdown ─────────────────────────────────────────────────────────────────
 
 void renderShutdownUI()
 {
-    // Two-step confirm: first show prompt, hold to confirm, double-click to cancel
     u8g2.clearBuffer();
     u8g2.setFont(u8g2_font_8x13_tr);
     u8g2.drawStr(4, 15, "Schlafen?");
@@ -333,7 +561,6 @@ void renderShutdownUI()
     {
     case BTN_HOLD:
     {
-        // Brief "Bye" screen before sleeping
         u8g2.clearBuffer();
         u8g2.setFont(u8g2_font_8x13_tr);
         u8g2.drawStr(20, 24, "Tschuss!");
@@ -347,7 +574,14 @@ void renderShutdownUI()
         if (wifiRunning)
             stopWifi();
 
-        esp_deep_sleep_enable_gpio_wakeup(1ULL << PIN_BUTTON, ESP_GPIO_WAKEUP_GPIO_LOW);
+        // Configure PIN_BUTTON (boot/GPIO9) as input with pull-up via IDF
+        // driver — Arduino's pinMode does not persist into deep sleep on C3.
+        gpio_reset_pin((gpio_num_t)PIN_BUTTON);
+        gpio_set_direction((gpio_num_t)PIN_BUTTON, GPIO_MODE_INPUT);
+        gpio_pullup_en((gpio_num_t)PIN_BUTTON);
+
+        esp_deep_sleep_enable_gpio_wakeup(1ULL << PIN_BUTTON,
+                                          ESP_GPIO_WAKEUP_GPIO_LOW);
         esp_deep_sleep_start();
         break; // unreachable
     }
@@ -358,7 +592,6 @@ void renderShutdownUI()
     default:
         break;
     }
-
     delay(20);
 }
 
@@ -390,7 +623,5 @@ void stateMachine()
 {
     showSplash();
     while (true)
-    {
         loopUI();
-    }
 }
